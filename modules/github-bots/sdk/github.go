@@ -39,8 +39,30 @@ func NewGitHubClient(ctx context.Context, org, repo, policyName string) GitHubCl
 		policyName: policyName,
 		sometimes:  rate.Sometimes{Interval: 30 * time.Minute},
 	}
+
+	// Don't use oauth2.NewClient because it always wraps with oauth2.ReuseTokenSource,
+	// which doesn't work well with our auto-revoking octo token source, and we already
+	// reuse tokens ourselves. Unfortunately, oauth2 can smuggle a configured transport
+	// via the oauth2.HTTPClient context key, so we have to use oauth2.NewClient to get
+	// at the http.Client. So we default to http.DefaultClient.Transport, but we use the
+	// base that gets returned by NewClient if it's an oauth2.Transport. Sorry. There are
+	// tests that abuse this.
+	base := http.DefaultClient.Transport
+	unused := oauth2.NewClient(ctx, ts)
+	tr, ok := unused.Transport.(*oauth2.Transport)
+	if ok {
+		base = tr.Base
+	}
+
+	hc := &http.Client{
+		Transport: &oauth2.Transport{
+			Base:   base,
+			Source: ts,
+		},
+	}
+
 	return GitHubClient{
-		inner: github.NewClient(oauth2.NewClient(ctx, ts)),
+		inner: github.NewClient(hc),
 		ts:    ts,
 		// TODO: Make this configurable?
 		bufSize: 1024 * 1024, // 1MB buffer for requests
